@@ -1,0 +1,20 @@
+# Secrets and sensitive configuration
+secrets.h
+
+# Arduino IDE files
+*.hex
+*.bin
+*.elf
+*.map
+
+# Build directories
+build/
+dist/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
