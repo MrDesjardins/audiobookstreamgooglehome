@@ -18,7 +18,10 @@ bool postSent = false;
 
 void setup() {
   Serial.begin(115200);
+
   analogReadResolution(12);
+  analogSetPinAttenuation(POT_PIN, ADC_11db);
+
 
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("Connecting to WiFi");
@@ -62,8 +65,8 @@ void sendPost(int value) {
 
 void loop() {
   int rawValue = readAveragedPot();
-  Serial.print("Value:");
-  Serial.println(rawValue);
+  // Serial.print("Value:");
+  // Serial.println(rawValue);
   int mappedValue = map(rawValue, 0, 4095, MIN_VALUE, MAX_VALUE + 1);
   mappedValue = constrain(mappedValue, MIN_VALUE, MAX_VALUE);
 
@@ -75,8 +78,8 @@ void loop() {
     lastChangeTime = now;
     postSent = false;
 
-    Serial.print("Value changed to ");
-    Serial.println(mappedValue);
+    //Serial.print("Value changed to ");
+    //Serial.println(mappedValue);
   }
 
   // Check stabilization
