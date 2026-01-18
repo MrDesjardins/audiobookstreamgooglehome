@@ -679,13 +679,38 @@ void sendPlayRequest(int index) {
   http.end();
 
   // Playback request sent successfully!
-  Serial.println("Playback request sent (HTTP 200)");
-  Serial.println("Restarting ESP32 to recover display...");
+  Serial.println("Playback request sent");
+  Serial.println("Recovering display without ESP restart...");
 
-  delay(500);
+  // DISCONNECT WiFi completely
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(1000);  // Critical delay to let WiFi fully shut down
+  Serial.println("WiFi disconnected");
 
-  // RESTART ESP32 completely - this will run setup() again with fresh WiFi/display init
-  ESP.restart();
+  // HARDWARE RESET of TFT display via RST pin (GPIO4)
+  Serial.println("Performing display hardware reset...");
+  pinMode(4, OUTPUT);
+  digitalWrite(4, LOW);   // Pull reset low
+  delay(100);             // Hold reset for 100ms
+  digitalWrite(4, HIGH);  // Release reset
+  delay(200);             // Wait for display to initialize
+
+  // RE-INITIALIZE display
+  Serial.println("Re-initializing display...");
+  tft.init();
+  tft.setRotation(1);  // Landscape mode
+
+  // RESTORE backlight PWM
+  ledcAttach(BACKLIGHT_PIN, PWM_FREQ, PWM_RESOLUTION);
+  ledcWrite(BACKLIGHT_PIN, brightnessValue);
+  Serial.println("Backlight restored");
+
+  // REDRAW current screen (maintains position in list!)
+  Serial.println("Redrawing display...");
+  updateDisplay();
+
+  Serial.println("Display recovered - ready for interaction!");
 }
 
 // ============================================================================
