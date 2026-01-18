@@ -34,9 +34,11 @@
 // SERVER CONFIGURATION
 // ============================================================================
 const char* SERVER_URL = "http://10.0.0.181:8801";
-const char* LIST_URL = "http://10.0.0.181:8801/list";       // GET: returns {"tracks":["1.mp3","2.mp3"]}
-const char* DEVICES_URL = "http://10.0.0.181:8801/listdevices";  // GET: returns {"devices":["device1","device2"]}
-const char* POST_URL = "http://10.0.0.181:8801/play";        // POST: {"track":"1.mp3", "device":"device_name"}
+
+// Build endpoint URLs using SERVER_URL
+String LIST_URL = String(SERVER_URL) + "/list";       // GET: returns {"tracks":["1.mp3","2.mp3"]}
+String DEVICES_URL = String(SERVER_URL) + "/listdevices";  // GET: returns {"devices":["device1","device2"]}
+String POST_URL = String(SERVER_URL) + "/play";        // POST: {"track":"1.mp3", "device":"device_name"}
 
 // ============================================================================
 // PIN DEFINITIONS
@@ -88,6 +90,7 @@ DisplayMode currentMode = MODE_TRACK_SELECTION;
 String audiobooks[50];            // Array to store audiobook names (max 50)
 int audiobookCount = 0;           // Number of audiobooks loaded
 int currentTrackSelection = 0;    // Currently selected audiobook index
+int lastPlayedTrack = -1;         // Last track that was played (-1 = none)
 int lastEncoderValue = 0;         // Previous encoder position
 
 // ============================================================================
@@ -131,6 +134,334 @@ const int PWM_FREQ = 5000;       // 5kHz frequency
 const int PWM_RESOLUTION = 8;    // 8-bit resolution (0-255)
 
 // ============================================================================
+// BOOT ANIMATION - Character wakes up and goes to sleep
+// ============================================================================
+void drawCharacter(int x, int y, uint16_t color, bool inBed = false) {
+  // Draw simple character: head + body + arms + legs
+  if (inBed) {
+    // Character lying down in bed
+    tft.fillCircle(x, y, 12, color);  // Head
+    tft.fillRect(x + 10, y - 6, 30, 12, color);  // Body horizontal
+  } else {
+    // Character standing
+    tft.fillCircle(x, y, 12, color);  // Head
+    tft.fillRect(x - 6, y + 12, 12, 25, color);  // Body
+    tft.fillRect(x - 15, y + 15, 10, 5, color);  // Left arm
+    tft.fillRect(x + 5, y + 15, 10, 5, color);   // Right arm
+    tft.fillRect(x - 8, y + 37, 6, 20, color);   // Left leg
+    tft.fillRect(x + 2, y + 37, 6, 20, color);   // Right leg
+  }
+}
+
+void drawBed(int x, int y, uint16_t bedColor, uint16_t sheetColor) {
+  // Draw bed frame
+  tft.fillRect(x, y, 80, 10, bedColor);  // Mattress
+  tft.fillRect(x - 5, y - 15, 5, 25, bedColor);  // Left post
+  tft.fillRect(x + 80, y - 15, 5, 25, bedColor);  // Right post
+  // Draw blanket
+  tft.fillRect(x + 5, y - 8, 50, 15, sheetColor);  // Sheet
+}
+
+void drawSpeechBubble(int x, int y, const char* text) {
+  // Draw thought bubble
+  tft.fillCircle(x, y, 25, TFT_WHITE);
+  tft.drawCircle(x, y, 25, TFT_BLACK);
+  // Small bubble dots
+  tft.fillCircle(x - 15, y + 22, 4, TFT_WHITE);
+  tft.drawCircle(x - 15, y + 22, 4, TFT_BLACK);
+  tft.fillCircle(x - 20, y + 30, 3, TFT_WHITE);
+  tft.drawCircle(x - 20, y + 30, 3, TFT_BLACK);
+
+  // Draw text
+  tft.setTextColor(TFT_BLUE);
+  tft.setTextSize(2);
+  tft.setCursor(x - 20, y - 8);
+  tft.print(text);
+}
+
+void drawSun(int x, int y) {
+  // Draw sun with rays
+  tft.fillCircle(x, y, 18, TFT_YELLOW);
+  tft.drawCircle(x, y, 18, TFT_ORANGE);
+  // Sun rays
+  for (int i = 0; i < 8; i++) {
+    float angle = i * 45 * 3.14159 / 180;
+    int x1 = x + cos(angle) * 22;
+    int y1 = y + sin(angle) * 22;
+    int x2 = x + cos(angle) * 28;
+    int y2 = y + sin(angle) * 28;
+    tft.drawLine(x1, y1, x2, y2, TFT_ORANGE);
+  }
+}
+
+void drawMoon(int x, int y) {
+  // Draw crescent moon
+  tft.fillCircle(x, y, 16, TFT_WHITE);
+  tft.fillCircle(x + 8, y - 4, 14, 0x0841);  // Dark blue to create crescent
+  // Add some stars near moon
+  tft.fillCircle(x - 25, y - 10, 1, TFT_WHITE);
+  tft.fillCircle(x + 22, y + 8, 1, TFT_WHITE);
+  tft.fillCircle(x - 18, y + 15, 1, TFT_WHITE);
+}
+
+void drawMusicNote(int x, int y, uint16_t color) {
+  // Draw a simple music note
+  tft.fillCircle(x, y + 8, 4, color);       // Note head
+  tft.fillRect(x + 3, y, 2, 10, color);     // Note stem
+}
+
+void drawCloud(int x, int y, uint16_t color) {
+  // Draw a simple cloud shape
+  tft.fillCircle(x, y, 12, color);
+  tft.fillCircle(x + 15, y, 12, color);
+  tft.fillCircle(x + 7, y - 8, 10, color);
+  tft.fillRect(x - 12, y, 27, 12, color);
+}
+
+void playDownloadAnimation(String trackName) {
+  // Dark night background for download animation
+  uint16_t nightBlue = 0x0003;
+  tft.fillScreen(nightBlue);
+
+  // Draw stars in background
+  for (int i = 0; i < 20; i++) {
+    int sx = random(0, 320);
+    int sy = random(0, 180);
+    tft.fillCircle(sx, sy, 1, TFT_WHITE);
+  }
+
+  // Draw moon
+  drawMoon(280, 80);
+
+  // Draw bed with sleeping character at bottom
+  int bedX = 130;
+  int bedY = 200;
+  drawBed(bedX, bedY, TFT_BROWN, TFT_DARKGREY);
+  drawCharacter(bedX + 20, bedY - 4, TFT_ORANGE, true);
+
+  // Draw cloud near moon
+  int cloudX = 240;
+  int cloudY = 80;
+  drawCloud(cloudX, cloudY, TFT_WHITE);
+
+  // Display track name at top
+  tft.setTextColor(TFT_CYAN, nightBlue);
+  tft.setTextSize(2);
+  String displayName = trackName;
+  displayName.replace("_", " ");
+  if (displayName.length() > 23) {
+    displayName = displayName.substring(0, 20) + "...";
+  }
+  tft.setCursor(10, 10);
+  tft.print("Playing:");
+  tft.setCursor(10, 30);
+  tft.print(displayName);
+
+  // Animate music notes falling from cloud to character
+  // 10 waves of notes
+  for (int wave = 0; wave < 6; wave++) {
+    // Start positions for 3 notes
+    int note1X = cloudX - 10;
+    int note2X = cloudX + 5;
+    int note3X = cloudX + 20;
+
+    for (int step = 0; step < 25; step++) {
+      // Calculate Y positions (falling down)
+      int note1Y = cloudY + 20 + (step * 5);
+      int note2Y = cloudY + 20 + (step * 5) - 20;  // Offset
+      int note3Y = cloudY + 20 + (step * 5) - 40;  // More offset
+
+      // Clear previous positions (carefully to avoid cloud area)
+      if (step > 0) {
+        int prevY1 = cloudY + 20 + ((step - 1) * 5);
+        int prevY2 = prevY1 - 20;
+        int prevY3 = prevY1 - 40;
+
+        // Only clear note1 if it's below the cloud
+        if (prevY1 > cloudY + 35) {
+          tft.fillRect(note1X - 5, prevY1 - 5, 15, 20, nightBlue);
+        }
+        // Only clear note2 if it's below the cloud
+        if (prevY2 > cloudY + 35) {
+          tft.fillRect(note2X - 5, prevY2 - 5, 15, 20, nightBlue);
+        }
+        // Only clear note3 if it's below the cloud
+        if (prevY3 > cloudY + 35) {
+          tft.fillRect(note3X - 5, prevY3 - 5, 15, 20, nightBlue);
+        }
+
+        // Redraw any stars that were cleared
+        if (random(0, 3) == 0) {
+          int sx = random(note1X - 10, note3X + 10);
+          int sy = random(max(prevY1 - 10, 120), min(prevY1 + 10, 180));
+          if (sy < 180) tft.fillCircle(sx, sy, 1, TFT_WHITE);
+        }
+      }
+
+      // Draw notes at new positions (only between cloud and bed)
+      if (note1Y > cloudY + 30 && note1Y < bedY - 15) drawMusicNote(note1X, note1Y, TFT_YELLOW);
+      if (note2Y > cloudY + 30 && note2Y < bedY - 15) drawMusicNote(note2X, note2Y, TFT_CYAN);
+      if (note3Y > cloudY + 30 && note3Y < bedY - 15) drawMusicNote(note3X, note3Y, TFT_MAGENTA);
+
+      delay(60);  // Animation speed
+    }
+
+    // Clear any remaining notes at the bottom after this wave
+    tft.fillRect(note1X - 5, bedY - 25, 15, 20, nightBlue);
+    tft.fillRect(note2X - 5, bedY - 25, 15, 20, nightBlue);
+    tft.fillRect(note3X - 5, bedY - 25, 15, 20, nightBlue);
+  }
+
+  // Show "Downloading complete" message
+  tft.fillRect(0, 100, 320, 40, nightBlue);
+  tft.setTextColor(TFT_GREEN, nightBlue);
+  tft.setTextSize(2);
+  tft.setCursor(80, 110);
+  tft.print("Loading...");
+  delay(500);
+}
+
+void playBootAnimation() {
+  // Color scheme - day to night transition (light to dark)
+  uint16_t dayBlue = 0x5D1F;       // Bright sky blue (day)
+  uint16_t afternoonBlue = 0x3C5F; // Medium blue (afternoon)
+  uint16_t eveningBlue = 0x1C07;   // Darker blue (evening)
+  uint16_t nightBlue = 0x0003;     // Very dark blue (night)
+
+  // Start with bright daytime sky
+  tft.fillScreen(dayBlue);
+
+  // Title at top with dark text for light background
+  tft.setTextColor(TFT_NAVY);
+  tft.setTextSize(3);
+  tft.setCursor(60, 10);
+  tft.print("AUDIOBOOK");
+  tft.setCursor(90, 40);
+  tft.print("PLAYER");
+
+  int bedX = 120;
+  int bedY = 150;
+
+  // Draw bright daytime sun
+  drawSun(40, 85);
+
+  // ===== FRAME 1: Character sleeping in bed (DAYTIME) =====
+  drawBed(bedX, bedY, TFT_BROWN, TFT_BLUE);
+  drawCharacter(bedX + 20, bedY - 4, TFT_ORANGE, true);  // In bed
+  drawSpeechBubble(bedX + 30, bedY - 50, "Zzz");
+  delay(800);
+
+  // ===== FRAME 2: Character wakes up (sits up) - DAYTIME =====
+  // Clear speech bubble area completely
+  tft.fillRect(bedX - 30, bedY - 80, 120, 85, dayBlue);  // Clear with day sky
+  drawBed(bedX, bedY, TFT_BROWN, TFT_BLUE);
+  // Character sitting up in bed
+  tft.fillCircle(bedX + 30, bedY - 20, 12, TFT_ORANGE);  // Head
+  tft.fillRect(bedX + 24, bedY - 8, 12, 20, TFT_ORANGE);  // Body
+  tft.fillRect(bedX + 15, bedY - 5, 10, 5, TFT_ORANGE);   // Left arm
+  tft.fillRect(bedX + 36, bedY - 5, 10, 5, TFT_ORANGE);   // Right arm
+  delay(500);
+
+  // ===== FRAME 3: Character jumps out! - DAYTIME =====
+  tft.fillRect(bedX - 10, bedY - 80, 100, 90, dayBlue);  // Clear area
+  drawBed(bedX, bedY, TFT_BROWN, TFT_BLUE);
+  drawCharacter(bedX + 50, bedY - 60, TFT_ORANGE);  // Jumping (orange = excited!)
+  tft.setTextColor(TFT_RED);
+  tft.setTextSize(2);
+  tft.setCursor(bedX + 70, bedY - 70);
+  tft.print("!");
+  delay(400);
+
+  // ===== TRANSITION TO AFTERNOON =====
+  tft.fillScreen(afternoonBlue);
+  // Redraw title - still dark text
+  tft.setTextColor(TFT_NAVY);
+  tft.setTextSize(3);
+  tft.setCursor(60, 10);
+  tft.print("AUDIOBOOK");
+  tft.setCursor(90, 40);
+  tft.print("PLAYER");
+  // Sun still visible
+  drawSun(35, 90);
+
+  // ===== FRAME 4: Character walks - AFTERNOON =====
+  drawCharacter(100, bedY - 30, TFT_GREEN);  // Walking (green)
+  delay(400);
+
+  // ===== TRANSITION TO EVENING - Sun setting =====
+  tft.fillScreen(eveningBlue);
+  // Redraw title - lighter text for darker background
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextSize(3);
+  tft.setCursor(60, 10);
+  tft.print("AUDIOBOOK");
+  tft.setCursor(90, 40);
+  tft.print("PLAYER");
+  // Sun low on horizon
+  drawSun(25, 110);
+
+  // ===== FRAME 5: Character walks more - EVENING =====
+  drawCharacter(60, bedY - 30, TFT_MAGENTA);  // Walking (magenta)
+  delay(400);
+
+  // ===== TRANSITION TO NIGHT - Moon appears =====
+  tft.fillScreen(nightBlue);
+  // Redraw title - bright text for dark background
+  tft.setTextColor(TFT_CYAN);
+  tft.setTextSize(3);
+  tft.setCursor(60, 10);
+  tft.print("AUDIOBOOK");
+  tft.setCursor(90, 40);
+  tft.print("PLAYER");
+  // Moon in sky
+  drawMoon(40, 85);
+  // Add stars
+  for (int i = 0; i < 15; i++) {
+    int sx = random(0, 320);
+    int sy = random(70, 240);
+    tft.fillCircle(sx, sy, 1, TFT_WHITE);
+  }
+
+  // ===== FRAME 6: Character yawns and walks back - NIGHT =====
+  drawCharacter(90, bedY - 30, TFT_PINK);  // Pink = sleepy
+  // Yawn effect
+  tft.drawCircle(90, bedY - 30 + 12, 8, TFT_WHITE);
+  delay(500);
+
+  // ===== FRAME 7: Back to bed - NIGHT =====
+  tft.fillRect(0, bedY - 80, 320, 120, nightBlue);  // Clear with dark night
+  // Redraw stars in the cleared area
+  tft.fillCircle(50, bedY - 40, 1, TFT_WHITE);
+  tft.fillCircle(130, bedY - 20, 1, TFT_WHITE);
+  tft.fillCircle(180, bedY - 60, 1, TFT_WHITE);
+  tft.fillCircle(95, bedY - 55, 1, TFT_WHITE);
+  drawBed(bedX, bedY, TFT_BROWN, TFT_DARKGREY);  // Dark blanket for night
+  drawCharacter(bedX + 20, bedY - 4, TFT_ORANGE, true);  // Back in bed
+  delay(400);
+
+  // ===== FRAME 8: Sleeping with Zzz - NIGHT =====
+  drawSpeechBubble(bedX + 30, bedY - 50, "ZzZ");
+  delay(600);
+
+  // ===== FRAME 9: More Zzz - NIGHT =====
+  // Clear old bubble completely
+  tft.fillRect(bedX + 5, bedY - 80, 60, 65, nightBlue);  // Clear with dark night
+  // Redraw stars that were cleared
+  tft.fillCircle(bedX + 30, bedY - 60, 1, TFT_WHITE);
+  tft.fillCircle(bedX + 45, bedY - 70, 1, TFT_WHITE);
+  drawSpeechBubble(bedX + 30, bedY - 50, "ZZzz");
+  delay(600);
+
+  // Final message - dark background with bright text
+  tft.fillRect(0, 200, 320, 40, nightBlue);
+  tft.setTextColor(TFT_GREEN);
+  tft.setTextSize(2);
+  tft.setCursor(115, 210);
+  tft.print("Ready!");
+  delay(800);
+}
+
+// ============================================================================
 // SETUP - Runs once at startup
 // ============================================================================
 void setup() {
@@ -161,6 +492,11 @@ void setup() {
   selectedDevice = preferences.getString("deviceName", "");
   Serial.print("Loaded device name: ");
   Serial.println(selectedDevice);
+
+  // Load last played track (default: -1 = none)
+  lastPlayedTrack = preferences.getInt("lastPlayed", -1);
+  Serial.print("Loaded last played track: ");
+  Serial.println(lastPlayedTrack);
 
   // *** CONNECT WIFI FIRST - BEFORE DISPLAY INITIALIZATION ***
   Serial.println("Connecting WiFi BEFORE display init...");
@@ -206,20 +542,10 @@ void setup() {
   tft.setRotation(1);  // Landscape mode (320x240)
   Serial.println("TFT initialized");
 
-  // Draw startup screen
-  Serial.println("Drawing startup screen...");
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(3);
-  tft.setCursor(10, 10);
-  tft.println("AUDIOBOOK");
-  tft.setCursor(10, 50);
-  tft.println("PLAYER");
-  tft.setTextSize(2);
-  tft.setCursor(10, 100);
-  tft.println("Ready!");
-  Serial.println("Startup screen drawn");
-  delay(2000);
+  // Play boot animation
+  Serial.println("Playing boot animation...");
+  playBootAnimation();
+  Serial.println("Boot animation complete");
 
   // Initialize rotary encoder
   ESP32Encoder::useInternalWeakPullResistors = puType::up;  // Enable pull-up resistors
@@ -429,7 +755,9 @@ void displayModeIndicator() {
     tft.print("MODE: BRIGHTNESS");
   } else if (currentMode == MODE_OUTPUT_SELECTION) {
     tft.print("MODE: OUTPUT [");
-    tft.print(selectedDevice);
+    String deviceDisplay = selectedDevice;
+    deviceDisplay.replace("_", " ");
+    tft.print(deviceDisplay);
     tft.print("]");
   }
 }
@@ -465,9 +793,21 @@ void displayTrackSelection() {
     tft.setCursor(5, yPos);
     tft.setTextSize(TEXT_SIZE);
 
+    // Show indicator if this is the last played track
+    if (i == lastPlayedTrack) {
+      tft.print("> ");  // Play indicator
+    } else {
+      tft.print("  ");  // Spacing
+    }
+
     String displayName = audiobooks[i];
-    if (displayName.length() > MAX_NAME_LENGTH) {
-      displayName = displayName.substring(0, MAX_NAME_LENGTH - 3) + "...";
+    // Replace underscores with spaces for prettier display
+    displayName.replace("_", " ");
+
+    // Adjust max length to account for indicator
+    int maxLen = MAX_NAME_LENGTH - 2;
+    if (displayName.length() > maxLen) {
+      displayName = displayName.substring(0, maxLen - 3) + "...";
     }
 
     tft.println(displayName);
@@ -562,6 +902,8 @@ void displayOutputSelection() {
     tft.setTextSize(TEXT_SIZE);
 
     String displayName = audioDevices[i];
+    // Replace underscores with spaces for prettier display
+    displayName.replace("_", " ");
 
     // Show checkmark for currently active device
     if (audioDevices[i] == selectedDevice) {
@@ -609,14 +951,17 @@ void sendPlayRequest(int index) {
   Serial.print("]: ");
   Serial.println(audiobooks[index]);
 
-  // Save current track selection to preferences
+  // Save current track selection and last played to preferences
   preferences.putInt("trackIdx", index);
   lastSavedTrackIndex = index;
+  preferences.putInt("lastPlayed", index);
+  lastPlayedTrack = index;
   Serial.print("Saved track index: ");
   Serial.println(index);
 
-  // DO NOT TOUCH DISPLAY - WiFi will corrupt it
-  // Just reconnect WiFi in background
+  // PLAY DOWNLOAD ANIMATION (shows while WiFi connects)
+  Serial.println("Playing download animation...");
+  playDownloadAnimation(audiobooks[index]);
 
   // RECONNECT WiFi
   Serial.println("Reconnecting WiFi for playback...");
