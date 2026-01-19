@@ -69,42 +69,50 @@ If you prefer to modify the library's default configuration file:
    #define TFT_HEIGHT 320
    ```
 
-4. Configure SPI pins:
+4. Configure SPI pins (HSPI):
    ```cpp
    #define TFT_MISO -1   // Not connected
-   #define TFT_MOSI 23
-   #define TFT_SCLK 18
+   #define TFT_MOSI 13   // HSPI MOSI
+   #define TFT_SCLK 14   // HSPI SCLK
    #define TFT_CS   5
    #define TFT_DC   2
    #define TFT_RST  4
    ```
 
-5. **IMPORTANT:** Do NOT define TFT_BL (backlight is controlled by code):
+5. **IMPORTANT:** Enable HSPI port to avoid WiFi conflicts:
    ```cpp
-   // #define TFT_BL 25  // Leave commented out!
+   #define USE_HSPI_PORT
+   #define SUPPORT_TRANSACTIONS
    ```
 
-6. Set SPI frequency:
+6. **IMPORTANT:** Do NOT define TFT_BL (backlight is controlled by code):
    ```cpp
-   #define SPI_FREQUENCY  27000000  // 27MHz (safe speed)
+   // #define TFT_BL 26  // Leave commented out!
    ```
 
-7. Save the file
+7. Set SPI frequency:
+   ```cpp
+   #define SPI_FREQUENCY  10000000  // 10MHz (safe speed for this display)
+   ```
+
+8. Save the file
 
 ## Pin Connections
 
-### TFT Display (SPI)
+**Important:** We use HSPI (not VSPI) for the TFT display to avoid conflicts with WiFi. This requires specific pin assignments.
+
+### TFT Display (HSPI)
 
 | Display Pin | ESP32 GPIO | Notes |
 |-------------|------------|-------|
 | GND | GND | Ground |
 | VCC | 3.3V | Power (3.3V only!) |
-| SCL | 18 | SPI Clock |
-| SDA | 23 | SPI MOSI |
+| SCL | **14** | SPI Clock (HSPI SCLK) |
+| SDA | **13** | SPI MOSI (HSPI MOSI) |
 | RST | 4 | Display Reset |
 | DC | 2 | Data/Command |
 | CS | 5 | Chip Select |
-| BL | 25 | Backlight (PWM controlled) |
+| BL | **26** | Backlight (PWM controlled) |
 | K0 | 15 | Brightness button |
 
 ### EC11 Rotary Encoder
@@ -112,10 +120,14 @@ If you prefer to modify the library's default configuration file:
 | Encoder Pin | ESP32 GPIO | Notes |
 |-------------|------------|-------|
 | CLK (A) | 27 | Phase A |
-| DT (B) | 14 | Phase B |
-| SW | 12 | Push button (play) |
+| DT (B) | **25** | Phase B (moved from 14 for HSPI) |
+| SW | **19** | Push button (moved from 13 for HSPI) |
 | VCC | 3.3V | Shared with display |
 | GND | GND | Ground |
+
+### Why HSPI?
+
+The ESP32 has two SPI buses: VSPI and HSPI. WiFi uses VSPI internally, which caused display corruption when both WiFi and the TFT were active on the same bus. By moving the TFT to HSPI, they operate on completely separate buses, eliminating interference.
 
 ## WiFi Configuration
 

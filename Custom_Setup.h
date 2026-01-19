@@ -49,18 +49,18 @@
 #define SMOOTH_FONT
 
 // ============================================================================
-// SPI PIN CONFIGURATION FOR ESP32
+// SPI PIN CONFIGURATION FOR ESP32 - USING HSPI
 // ============================================================================
-// For ESP32 Dev board (only tested with ILI9341 display)
-// The hardware SPI can be mapped to any pins
+// Using HSPI instead of VSPI to avoid conflicts with WiFi which uses VSPI.
+// This completely separates the TFT SPI bus from WiFi, eliminating corruption.
 
-// ESP32 VSPI (SPI3) default pins:
-// MOSI = 23, MISO = 19, SCLK = 18, SS = 5
+// ESP32 HSPI (SPI2) default pins:
+// MOSI = 13, MISO = 12, SCLK = 14, SS = 15
 
-// We're using these custom pins for the audiobook player:
+// We're using HSPI pins for the audiobook player:
 #define TFT_MISO -1    // Not connected (display is output only)
-#define TFT_MOSI 23    // SDA - Master Out Slave In
-#define TFT_SCLK 18    // SCL - Serial Clock
+#define TFT_MOSI 13    // SDA - Master Out Slave In (HSPI MOSI)
+#define TFT_SCLK 14    // SCL - Serial Clock (HSPI SCLK)
 #define TFT_CS   5     // Chip select control pin
 #define TFT_DC   2     // Data Command control pin
 #define TFT_RST  4     // Reset pin (could connect to RST pin on ESP32)
@@ -112,10 +112,10 @@
 // SPI PORT (ESP32 specific)
 // ============================================================================
 // The ESP32 has 2 free SPI ports i.e. VSPI and HSPI, the VSPI is the default.
-// If the VSPI port is in use and pins are not accessible (e.g. WROVER) then
-// uncomment the following line to use the HSPI port instead:
+// We use HSPI to avoid conflicts with WiFi which uses VSPI internally.
+// This completely eliminates display corruption when WiFi is active.
 
-//#define USE_HSPI_PORT
+#define USE_HSPI_PORT
 
 // ============================================================================
 // TOUCH SCREEN (not used in this project)

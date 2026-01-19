@@ -40,17 +40,19 @@ The module is a combination of 2.4 inch SPI interface display module and EC11 ro
 
 # ESP-32 Pins
 
-## TFT Display (SPI)
+**Important:** We use HSPI for the TFT display to avoid conflicts with WiFi (which uses VSPI).
+
+## TFT Display (HSPI)
 
 ```
 LCD GND  → ESP32 GND
 LCD VCC  → ESP32 3.3V
-LCD SCL  → ESP32 GPIO18 (SPI SCK)
-LCD SDA  → ESP32 GPIO23 (SPI MOSI)
+LCD SCL  → ESP32 GPIO14 (HSPI SCLK)
+LCD SDA  → ESP32 GPIO13 (HSPI MOSI)
 LCD RST  → ESP32 GPIO4
 LCD DC   → ESP32 GPIO2
 LCD CS   → ESP32 GPIO5
-LCD BL   → ESP32 GPIO25 (PWM for brightness control)
+LCD BL   → ESP32 GPIO26 (PWM for brightness control)
 LCD K0   → ESP32 GPIO15 (brightness adjustment button)
 ```
 
@@ -58,13 +60,17 @@ LCD K0   → ESP32 GPIO15 (brightness adjustment button)
 
 ```
 Encoder CLK (A)      → ESP32 GPIO27
-Encoder DT (B)       → ESP32 GPIO14
-Encoder SW (Push)    → ESP32 GPIO13 (push encoder down to play)
+Encoder DT (B)       → ESP32 GPIO25
+Encoder SW (Push)    → ESP32 GPIO19 (push encoder down to play)
 GND                  → ESP32 GND
 VCC                  → 3.3V (shared with display)
 ```
 
 **Note:** SW = Switch (the push button inside the encoder knob). When you press down on the encoder, this pin connects to ground. It may be labeled SW, KEY, BTN, or S on your module.
+
+## Why These Pin Assignments?
+
+The ESP32 has two SPI buses: **VSPI** and **HSPI**. WiFi uses VSPI internally. By using HSPI (GPIO 13/14) for the TFT display, we completely avoid SPI bus conflicts between WiFi and the display.
 
 # Libraries
 

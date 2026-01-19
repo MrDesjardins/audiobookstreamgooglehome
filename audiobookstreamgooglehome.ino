@@ -25,8 +25,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <SPI.h>          // For explicit SPI bus control during WiFi/display recovery
-#include <TFT_eSPI.h>
+#include <TFT_eSPI.h>     // TFT_eSPI manages HSPI internally
 #include <ESP32Encoder.h>
 #include <Preferences.h>  // For persistent storage across reboots
 #include "secrets.h"  // Contains WIFI_SSID and WIFI_PASS
@@ -45,16 +44,17 @@ String POST_URL = String(SERVER_URL) + "/play";        // POST: {"track":"1.mp3"
 // PIN DEFINITIONS
 // ============================================================================
 // Rotary Encoder (EC11)
+// Note: Encoder pins moved to avoid conflict with HSPI (GPIO 13/14 used by TFT)
 const int ENCODER_CLK = 27;  // Phase A (CLK)
-const int ENCODER_DT = 14;   // Phase B (DT)
-const int ENCODER_SW = 13;   // Encoder push button (plays audiobook) - MOVED FROM GPIO12 TO GPIO13
+const int ENCODER_DT = 25;   // Phase B (DT) - moved from GPIO14 to GPIO25
+const int ENCODER_SW = 19;   // Encoder push button - moved from GPIO13 to GPIO19
 
 // Additional Controls
 const int BRIGHTNESS_BTN = 15;  // K0 button (cycles brightness)
-const int BACKLIGHT_PIN = 26;   // TFT backlight PWM control (TEMPORARY TEST - moved from GPIO25 to GPIO26)
+const int BACKLIGHT_PIN = 26;   // TFT backlight PWM control
 
-// TFT SPI pins are configured in TFT_eSPI library User_Setup.h:
-// SCK=18, MOSI=23, RST=4, DC=2, CS=5
+// TFT SPI pins are configured in TFT_eSPI library Custom_Setup.h:
+// Using HSPI: SCK=14, MOSI=13, RST=4, DC=2, CS=5
 
 // ============================================================================
 // DISPLAY SETTINGS
@@ -219,6 +219,50 @@ void drawCloud(int x, int y, uint16_t color) {
   tft.fillCircle(x + 15, y, 12, color);
   tft.fillCircle(x + 7, y - 8, 10, color);
   tft.fillRect(x - 12, y, 27, 12, color);
+}
+
+void playTransitionAnimation(String trackName) {
+  // Quick transition animation (< 2 seconds)
+  // Wipe effect from list to "Please wait" screen
+
+  uint16_t wipeColor = TFT_NAVY;
+
+  // Horizontal wipe from left to right
+  for (int x = 0; x < 320; x += 20) {
+    tft.fillRect(x, 0, 20, 240, wipeColor);
+    delay(15);
+  }
+
+  // Draw waiting message
+  tft.setTextColor(TFT_WHITE, wipeColor);
+  tft.setTextSize(2);
+
+  // Track name at top
+  String displayName = trackName;
+  displayName.replace("_", " ");
+  if (displayName.length() > 24) {
+    displayName = displayName.substring(0, 21) + "...";
+  }
+  tft.setCursor(10, 30);
+  tft.print(displayName);
+
+  // Animated dots for "Please wait"
+  tft.setTextSize(3);
+  tft.setCursor(60, 100);
+  tft.print("Please");
+  tft.setCursor(85, 140);
+  tft.print("wait");
+
+  // Animated loading dots
+  int dotX = 200;
+  int dotY = 145;
+  for (int i = 0; i < 3; i++) {
+    tft.fillCircle(dotX + (i * 20), dotY, 5, TFT_CYAN);
+    delay(150);
+  }
+
+  // Brief pause to let user see the message
+  delay(200);
 }
 
 void playDownloadAnimation(String trackName) {
@@ -990,12 +1034,13 @@ void sendPlayRequest(int index) {
   Serial.print("Saved track index: ");
   Serial.println(index);
 
-  // PLAY DOWNLOAD ANIMATION (shows while WiFi connects)
-  Serial.println("Playing download animation...");
-  playDownloadAnimation(audiobooks[index]);
+  // QUICK TRANSITION ANIMATION - immediate feedback to user
+  Serial.println("Playing transition animation...");
+  playTransitionAnimation(audiobooks[index]);
 
-  // RECONNECT WiFi
-  Serial.println("Reconnecting WiFi for playback...");
+  // CONNECT WiFi FIRST and send request immediately
+  // This way Google Home starts loading while animation plays
+  Serial.println("Connecting WiFi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
@@ -1007,33 +1052,15 @@ void sendPlayRequest(int index) {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nERROR: WiFi reconnection failed!");
-    // Use robust recovery sequence even for error case
+    Serial.println("\nERROR: WiFi connection failed!");
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
-    delay(500);
+    delay(200);
 
-    // Reset SPI bus
-    SPI.end();
-    delay(100);
-
-    // Hardware reset display
-    pinMode(4, OUTPUT);
-    digitalWrite(4, LOW);
-    delay(150);
-    digitalWrite(4, HIGH);
-    delay(300);
-
-    // Re-initialize SPI and display
-    SPI.begin(18, -1, 23, 5);
-    delay(50);
+    // Simple recovery - HSPI is separate from WiFi's VSPI
     tft.init();
     tft.setRotation(1);
-    tft.fillScreen(TFT_BLACK);
-    delay(20);
     tft.fillScreen(BACKGROUND_COLOR);
-    ledcAttach(BACKLIGHT_PIN, PWM_FREQ, PWM_RESOLUTION);
-    ledcWrite(BACKLIGHT_PIN, brightnessValue);
 
     previousTrackSelection = -1;
     previousScrollOffset = -1;
@@ -1041,14 +1068,13 @@ void sendPlayRequest(int index) {
     return;
   }
 
-  Serial.println("\nWiFi reconnected!");
+  Serial.println("\nWiFi connected!");
 
-  // Prepare HTTP POST request
+  // SEND HTTP REQUEST IMMEDIATELY (Google Home starts loading now)
   HTTPClient http;
   http.begin(POST_URL);
   http.addHeader("Content-Type", "application/json");
 
-  // Build JSON payload: {"track":"filename.mp3", "device":"device_name"}
   String payload = "{\"track\":\"" + audiobooks[index] + "\"";
   if (selectedDevice != "") {
     payload += ",\"device\":\"" + selectedDevice + "\"";
@@ -1058,73 +1084,43 @@ void sendPlayRequest(int index) {
   Serial.print("Sending: ");
   Serial.println(payload);
 
-  // Send POST request
   int httpCode = http.POST(payload);
   Serial.print("Response code: ");
   Serial.println(httpCode);
-
   http.end();
 
-  // Playback request sent successfully!
-  Serial.println("Playback request sent");
-  Serial.println("Recovering display without ESP restart...");
+  Serial.println("Playback request sent - Google Home is loading");
+
+  // NOW play animation while Google Home buffers/starts
+  Serial.println("Playing animation while audio loads...");
+  playDownloadAnimation(audiobooks[index]);
+
+  Serial.println("Recovering display...");
 
   // =========================================================================
-  // ROBUST DISPLAY RECOVERY SEQUENCE
-  // WiFi and TFT share the VSPI bus, which causes corruption. This sequence
-  // fully resets the SPI bus state before re-initializing the display.
+  // DISPLAY RECOVERY - Simple since HSPI is separate from WiFi's VSPI
   // =========================================================================
 
-  // STEP 1: Disconnect WiFi completely
-  Serial.println("Step 1: Disconnecting WiFi...");
+  // Disconnect WiFi
+  Serial.println("Disconnecting WiFi...");
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
-  delay(500);  // Wait for WiFi radio to power down
-  Serial.println("WiFi radio off");
+  delay(200);
+  Serial.println("WiFi off");
 
-  // STEP 2: End the SPI bus to release all state
-  Serial.println("Step 2: Resetting SPI bus...");
-  SPI.end();
-  delay(100);
-
-  // STEP 3: Hardware reset TFT via RST pin (GPIO4)
-  Serial.println("Step 3: Hardware reset of TFT...");
-  pinMode(4, OUTPUT);
-  digitalWrite(4, LOW);   // Pull reset low
-  delay(150);             // Hold reset for 150ms (longer than before)
-  digitalWrite(4, HIGH);  // Release reset
-  delay(300);             // Wait for display controller to boot
-
-  // STEP 4: Re-initialize SPI bus with correct pins
-  Serial.println("Step 4: Re-initializing SPI bus...");
-  SPI.begin(18, -1, 23, 5);  // SCLK=18, MISO=-1(none), MOSI=23, SS=5
-  delay(50);
-
-  // STEP 5: Re-initialize TFT display
-  Serial.println("Step 5: Re-initializing TFT display...");
+  // Re-initialize TFT display (TFT_eSPI manages HSPI internally)
+  Serial.println("Re-initializing display...");
   tft.init();
-  tft.setRotation(1);  // Landscape mode
-  delay(50);
-
-  // STEP 6: Force full screen clear (multiple times to ensure clean state)
-  Serial.println("Step 6: Clearing display...");
-  tft.fillScreen(TFT_BLACK);
-  delay(20);
+  tft.setRotation(1);
   tft.fillScreen(BACKGROUND_COLOR);
-  delay(20);
 
-  // STEP 7: Restore backlight PWM
-  Serial.println("Step 7: Restoring backlight...");
-  ledcAttach(BACKLIGHT_PIN, PWM_FREQ, PWM_RESOLUTION);
-  ledcWrite(BACKLIGHT_PIN, brightnessValue);
-
-  // STEP 8: Force full redraw by resetting tracking variables
-  Serial.println("Step 8: Forcing full redraw...");
+  // Force full redraw
+  Serial.println("Redrawing...");
   previousTrackSelection = -1;
   previousScrollOffset = -1;
   updateDisplay();
 
-  Serial.println("Display recovered - ready for interaction!");
+  Serial.println("Display recovered!");
 }
 
 // ============================================================================

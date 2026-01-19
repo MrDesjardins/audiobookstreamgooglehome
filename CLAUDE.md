@@ -14,13 +14,15 @@ ESP32-based audiobook player with TFT display and rotary encoder interface. The 
 ## Architecture
 
 **Startup Flow:**
-1. Initialize backlight PWM (GPIO25, 5kHz, 8-bit resolution, starts at 50%)
-2. Initialize TFT display (landscape mode, 320x240)
-3. Connect to WiFi (credentials from secrets.h)
-4. HTTP GET /list endpoint to fetch audiobook names
-5. Parse JSON response: `{"tracks":["1.mp3","2.mp3"]}`
-6. Initialize EC11 encoder (half-quad mode with internal pull-ups)
-7. Display scrollable list with blue selection highlight
+1. Load saved preferences (brightness, track selection, device)
+2. Connect to WiFi FIRST (credentials from secrets.h)
+3. HTTP GET /list and /listdevices to fetch data
+4. Disconnect WiFi before display init
+5. Initialize backlight PWM (GPIO26, 5kHz, 8-bit resolution)
+6. Initialize TFT display (landscape mode, 320x240, using HSPI)
+7. Play boot animation (day-to-night transition)
+8. Initialize EC11 encoder (half-quad mode with internal pull-ups)
+9. Display scrollable list with blue selection highlight
 
 **Main Loop:**
 1. Poll encoder for rotation (updates selection with wrap-around)
@@ -50,32 +52,37 @@ ESP32-based audiobook player with TFT display and rotary encoder interface. The 
 
 ## Hardware Pin Configuration
 
-**TFT Display (SPI):**
-- SCK → GPIO18, MOSI → GPIO23
+**TFT Display (HSPI - avoids WiFi conflicts):**
+- SCK → GPIO14 (HSPI SCLK)
+- MOSI → GPIO13 (HSPI MOSI)
 - RST → GPIO4, DC → GPIO2, CS → GPIO5
-- BL (backlight) → GPIO25 (PWM controlled)
+- BL (backlight) → GPIO26 (PWM controlled)
 - K0 (button) → GPIO15
 
 **EC11 Rotary Encoder:**
 - CLK (Phase A) → GPIO27
-- DT (Phase B) → GPIO14
-- SW (button) → GPIO12
+- DT (Phase B) → GPIO25 (moved from GPIO14 to avoid HSPI conflict)
+- SW (button) → GPIO19 (moved from GPIO13 to avoid HSPI conflict)
 - Uses ESP32 internal pull-ups
+
+**Why HSPI?** WiFi uses VSPI internally. Using HSPI for the display completely separates the two SPI buses, eliminating display corruption during WiFi operations.
 
 ## TFT_eSPI Library Configuration
 
 **CRITICAL:** TFT_eSPI requires manual configuration before compilation.
 
-Edit `User_Setup.h` in the TFT_eSPI library folder:
+Copy `Custom_Setup.h` to the TFT_eSPI library folder, or edit `User_Setup.h`:
 ```cpp
 #define ST7789_DRIVER
 #define TFT_WIDTH  240
 #define TFT_HEIGHT 320
-#define TFT_MOSI 23
-#define TFT_SCLK 18
+#define TFT_MOSI 13    // HSPI MOSI
+#define TFT_SCLK 14    // HSPI SCLK
 #define TFT_CS   5
 #define TFT_DC   2
 #define TFT_RST  4
+#define USE_HSPI_PORT           // Use HSPI instead of VSPI
+#define SUPPORT_TRANSACTIONS    // Enable SPI transaction support
 ```
 
 See SETUP.md for detailed configuration instructions.
@@ -129,8 +136,9 @@ To change server IP, edit constants at top of .ino file.
 - Truncates long names with "..." suffix
 
 **PWM Backlight:**
-- Channel 0, 5kHz, 8-bit (0-255)
-- Three levels: 51 (20%), 128 (50%), 204 (80%)
+- GPIO26, 5kHz, 8-bit (0-255)
+- Adjustable via encoder in brightness mode
+- Saved to preferences, persists across reboots
 - Controlled via ESP32 LEDC peripheral
 
 **JSON Compatibility:**
@@ -140,7 +148,9 @@ To change server IP, edit constants at top of .ino file.
 
 ## Common Issues
 
-**Display blank:** Check TFT_eSPI configuration, verify ST7789 driver enabled
+**Display blank:** Check TFT_eSPI configuration, verify ST7789 driver enabled, check HSPI pins (GPIO13/14)
+
+**Display corruption after WiFi:** Ensure USE_HSPI_PORT is enabled in TFT_eSPI config. HSPI separates display from WiFi's VSPI bus.
 
 **Encoder backwards:** Swap ENCODER_CLK and ENCODER_DT pin assignments
 
@@ -148,7 +158,7 @@ To change server IP, edit constants at top of .ino file.
 
 **List empty:** Verify server is running and accessible, check Serial output for HTTP errors
 
-**Button not responding:** Check INPUT_PULLUP wiring (button should connect pin to GND)
+**Button not responding:** Check INPUT_PULLUP wiring (button should connect pin to GND). Encoder SW is GPIO19, K0 is GPIO15.
 
 ## Debugging
 
