@@ -92,6 +92,8 @@ int audiobookCount = 0;           // Number of audiobooks loaded
 int currentTrackSelection = 0;    // Currently selected audiobook index
 int lastPlayedTrack = -1;         // Last track that was played (-1 = none)
 int lastEncoderValue = 0;         // Previous encoder position
+int previousTrackSelection = -1;  // For smooth scrolling (track previous selection)
+int previousScrollOffset = -1;    // For smooth scrolling (track previous scroll position)
 
 // ============================================================================
 // AUDIO OUTPUT DEVICE DATA
@@ -762,72 +764,100 @@ void displayModeIndicator() {
   }
 }
 
-// Display track selection mode
+// Helper function to draw a single track item
+void drawTrackItem(int index, int yPos, bool isSelected) {
+  // Draw background
+  if (isSelected) {
+    tft.fillRect(0, yPos - 2, tft.width() - 6, ITEM_HEIGHT, SELECTED_BG_COLOR);
+    tft.setTextColor(SELECTED_TEXT_COLOR, SELECTED_BG_COLOR);
+  } else {
+    tft.fillRect(0, yPos - 2, tft.width() - 6, ITEM_HEIGHT, BACKGROUND_COLOR);
+    tft.setTextColor(TEXT_COLOR, BACKGROUND_COLOR);
+  }
+
+  tft.setCursor(5, yPos);
+  tft.setTextSize(TEXT_SIZE);
+
+  // Show indicator if this is the last played track
+  if (index == lastPlayedTrack) {
+    tft.print("> ");  // Play indicator
+  } else {
+    tft.print("  ");  // Spacing
+  }
+
+  String displayName = audiobooks[index];
+  // Replace underscores with spaces for prettier display
+  displayName.replace("_", " ");
+
+  // Adjust max length to account for indicator
+  int maxLen = MAX_NAME_LENGTH - 2;
+  if (displayName.length() > maxLen) {
+    displayName = displayName.substring(0, maxLen - 3) + "...";
+  }
+
+  tft.print(displayName);
+}
+
+// Display track selection mode (optimized for smooth scrolling)
 void displayTrackSelection() {
-  tft.fillScreen(BACKGROUND_COLOR);
-  displayModeIndicator();
-
-  if (audiobookCount == 0) {
-    tft.setCursor(5, 20);
-    tft.setTextSize(TEXT_SIZE);
-    tft.setTextColor(TEXT_COLOR);
-    tft.println("No audiobooks");
-    return;
-  }
-
   int maxVisibleItems = (tft.height() - 25) / ITEM_HEIGHT;
-  int scrollOffset = 0;
-  if (currentTrackSelection >= maxVisibleItems) {
-    scrollOffset = currentTrackSelection - maxVisibleItems + 1;
-  }
 
-  int yPos = 20;
-  for (int i = scrollOffset; i < audiobookCount && i < scrollOffset + maxVisibleItems; i++) {
-    if (i == currentTrackSelection) {
-      tft.fillRect(0, yPos - 2, tft.width(), ITEM_HEIGHT, SELECTED_BG_COLOR);
-      tft.setTextColor(SELECTED_TEXT_COLOR, SELECTED_BG_COLOR);
-    } else {
-      tft.setTextColor(TEXT_COLOR, BACKGROUND_COLOR);
+  // Page-based scrolling: each page shows maxVisibleItems
+  // Selection stays within a page until you cross the boundary
+  int scrollOffset = (currentTrackSelection / maxVisibleItems) * maxVisibleItems;
+
+  // Check if we need a full redraw or just partial update
+  bool needFullRedraw = (previousScrollOffset != scrollOffset) ||
+                        (previousScrollOffset == -1) ||
+                        (previousTrackSelection == -1);
+
+  if (needFullRedraw) {
+    // Full redraw needed (scroll position changed or first draw)
+    tft.fillScreen(BACKGROUND_COLOR);
+    displayModeIndicator();
+
+    if (audiobookCount == 0) {
+      tft.setCursor(5, 20);
+      tft.setTextSize(TEXT_SIZE);
+      tft.setTextColor(TEXT_COLOR);
+      tft.println("No audiobooks");
+      previousScrollOffset = scrollOffset;
+      previousTrackSelection = currentTrackSelection;
+      return;
     }
 
-    tft.setCursor(5, yPos);
-    tft.setTextSize(TEXT_SIZE);
-
-    // Show indicator if this is the last played track
-    if (i == lastPlayedTrack) {
-      tft.print("> ");  // Play indicator
-    } else {
-      tft.print("  ");  // Spacing
+    // Draw all visible items
+    int yPos = 20;
+    for (int i = scrollOffset; i < audiobookCount && i < scrollOffset + maxVisibleItems; i++) {
+      drawTrackItem(i, yPos, i == currentTrackSelection);
+      yPos += ITEM_HEIGHT;
     }
 
-    String displayName = audiobooks[i];
-    // Replace underscores with spaces for prettier display
-    displayName.replace("_", " ");
-
-    // Adjust max length to account for indicator
-    int maxLen = MAX_NAME_LENGTH - 2;
-    if (displayName.length() > maxLen) {
-      displayName = displayName.substring(0, maxLen - 3) + "...";
+    // Draw scroll indicator
+    if (audiobookCount > maxVisibleItems) {
+      int indicatorHeight = ((tft.height() - 20) * maxVisibleItems) / audiobookCount;
+      int indicatorY = 20 + ((tft.height() - 20) * scrollOffset) / audiobookCount;
+      tft.fillRect(tft.width() - 5, indicatorY, 3, indicatorHeight, TFT_DARKGREY);
     }
+  } else {
+    // Partial update - only redraw changed items (much faster, no flicker)
+    if (previousTrackSelection != currentTrackSelection) {
+      // Redraw the previously selected item (remove highlight)
+      if (previousTrackSelection >= scrollOffset &&
+          previousTrackSelection < scrollOffset + maxVisibleItems) {
+        int prevYPos = 20 + (previousTrackSelection - scrollOffset) * ITEM_HEIGHT;
+        drawTrackItem(previousTrackSelection, prevYPos, false);
+      }
 
-    tft.println(displayName);
-    yPos += ITEM_HEIGHT;
+      // Redraw the newly selected item (add highlight)
+      int newYPos = 20 + (currentTrackSelection - scrollOffset) * ITEM_HEIGHT;
+      drawTrackItem(currentTrackSelection, newYPos, true);
+    }
   }
 
-  // Scroll indicator
-  if (audiobookCount > maxVisibleItems) {
-    int indicatorHeight = ((tft.height() - 20) * maxVisibleItems) / audiobookCount;
-    int indicatorY = 20 + ((tft.height() - 20) * scrollOffset) / audiobookCount;
-    tft.fillRect(tft.width() - 5, indicatorY, 3, indicatorHeight, TFT_DARKGREY);
-  }
-
-  Serial.print("Track mode: showing ");
-  Serial.print(scrollOffset);
-  Serial.print("-");
-  Serial.print(min(scrollOffset + maxVisibleItems - 1, audiobookCount - 1));
-  Serial.print(" (selected: ");
-  Serial.print(currentTrackSelection);
-  Serial.println(")");
+  // Update tracking variables
+  previousScrollOffset = scrollOffset;
+  previousTrackSelection = currentTrackSelection;
 }
 
 // Display brightness adjustment mode
@@ -1074,11 +1104,20 @@ void loop() {
     if (currentMode == MODE_TRACK_SELECTION) {
       // Track selection mode - navigate through audiobooks
       currentTrackSelection += change;
+
+      // Wrap-around with full refresh
       if (currentTrackSelection < 0) {
+        // Wrapped from top to bottom - force full refresh
         currentTrackSelection = audiobookCount - 1;
+        previousTrackSelection = -1;  // Force full redraw
+        previousScrollOffset = -1;
       } else if (currentTrackSelection >= audiobookCount) {
+        // Wrapped from bottom to top - force full refresh
         currentTrackSelection = 0;
+        previousTrackSelection = -1;  // Force full redraw
+        previousScrollOffset = -1;
       }
+
       Serial.print("Track selection: ");
       Serial.println(audiobooks[currentTrackSelection]);
 
@@ -1140,6 +1179,7 @@ void loop() {
         Serial.print("Saved brightness: ");
         Serial.println(brightnessValue);
 
+        previousTrackSelection = -1;  // Force full redraw
         currentMode = MODE_TRACK_SELECTION;
         updateDisplay();
       } else if (currentMode == MODE_OUTPUT_SELECTION) {
@@ -1155,6 +1195,7 @@ void loop() {
         Serial.print("Saved device: ");
         Serial.println(selectedDevice);
 
+        previousTrackSelection = -1;  // Force full redraw
         currentMode = MODE_TRACK_SELECTION;
         updateDisplay();
       }
@@ -1197,6 +1238,7 @@ void loop() {
         currentMode = MODE_OUTPUT_SELECTION;
         Serial.println("*** SWITCHED TO OUTPUT SELECTION MODE ***");
       } else if (currentMode == MODE_OUTPUT_SELECTION) {
+        previousTrackSelection = -1;  // Force full redraw
         currentMode = MODE_TRACK_SELECTION;
         Serial.println("*** SWITCHED TO TRACK SELECTION MODE ***");
       }
