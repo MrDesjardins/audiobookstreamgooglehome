@@ -140,7 +140,7 @@
 // ADDITIONAL OPTIONS
 // ============================================================================
 
-// #define SUPPORT_TRANSACTIONS  // Enable transaction support (for shared SPI bus)
+#define SUPPORT_TRANSACTIONS  // Enable transaction support (for shared SPI bus - critical for WiFi!)
 // #define TFT_PARALLEL_8_BIT    // Use 8-bit parallel instead of SPI (not applicable)
 
 // ============================================================================

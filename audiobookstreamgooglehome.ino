@@ -25,6 +25,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <SPI.h>          // For explicit SPI bus control during WiFi/display recovery
 #include <TFT_eSPI.h>
 #include <ESP32Encoder.h>
 #include <Preferences.h>  // For persistent storage across reboots
@@ -320,7 +321,7 @@ void playDownloadAnimation(String trackName) {
   tft.setTextSize(2);
   tft.setCursor(80, 110);
   tft.print("Loading...");
-  delay(500);
+  delay(250);
 }
 
 void playBootAnimation() {
@@ -1007,24 +1008,35 @@ void sendPlayRequest(int index) {
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\nERROR: WiFi reconnection failed!");
-    // Don't draw error - WiFi failed so display might be corrupted anyway
-    // Just disconnect and restore
+    // Use robust recovery sequence even for error case
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
     delay(500);
 
-    // Reset and restore display
+    // Reset SPI bus
+    SPI.end();
+    delay(100);
+
+    // Hardware reset display
     pinMode(4, OUTPUT);
     digitalWrite(4, LOW);
-    delay(100);
+    delay(150);
     digitalWrite(4, HIGH);
-    delay(200);
+    delay(300);
 
+    // Re-initialize SPI and display
+    SPI.begin(18, -1, 23, 5);
+    delay(50);
     tft.init();
     tft.setRotation(1);
+    tft.fillScreen(TFT_BLACK);
+    delay(20);
+    tft.fillScreen(BACKGROUND_COLOR);
     ledcAttach(BACKLIGHT_PIN, PWM_FREQ, PWM_RESOLUTION);
     ledcWrite(BACKLIGHT_PIN, brightnessValue);
 
+    previousTrackSelection = -1;
+    previousScrollOffset = -1;
     updateDisplay();
     return;
   }
@@ -1057,32 +1069,59 @@ void sendPlayRequest(int index) {
   Serial.println("Playback request sent");
   Serial.println("Recovering display without ESP restart...");
 
-  // DISCONNECT WiFi completely
+  // =========================================================================
+  // ROBUST DISPLAY RECOVERY SEQUENCE
+  // WiFi and TFT share the VSPI bus, which causes corruption. This sequence
+  // fully resets the SPI bus state before re-initializing the display.
+  // =========================================================================
+
+  // STEP 1: Disconnect WiFi completely
+  Serial.println("Step 1: Disconnecting WiFi...");
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
-  delay(1000);  // Critical delay to let WiFi fully shut down
-  Serial.println("WiFi disconnected");
+  delay(500);  // Wait for WiFi radio to power down
+  Serial.println("WiFi radio off");
 
-  // HARDWARE RESET of TFT display via RST pin (GPIO4)
-  Serial.println("Performing display hardware reset...");
+  // STEP 2: End the SPI bus to release all state
+  Serial.println("Step 2: Resetting SPI bus...");
+  SPI.end();
+  delay(100);
+
+  // STEP 3: Hardware reset TFT via RST pin (GPIO4)
+  Serial.println("Step 3: Hardware reset of TFT...");
   pinMode(4, OUTPUT);
   digitalWrite(4, LOW);   // Pull reset low
-  delay(100);             // Hold reset for 100ms
+  delay(150);             // Hold reset for 150ms (longer than before)
   digitalWrite(4, HIGH);  // Release reset
-  delay(200);             // Wait for display to initialize
+  delay(300);             // Wait for display controller to boot
 
-  // RE-INITIALIZE display
-  Serial.println("Re-initializing display...");
+  // STEP 4: Re-initialize SPI bus with correct pins
+  Serial.println("Step 4: Re-initializing SPI bus...");
+  SPI.begin(18, -1, 23, 5);  // SCLK=18, MISO=-1(none), MOSI=23, SS=5
+  delay(50);
+
+  // STEP 5: Re-initialize TFT display
+  Serial.println("Step 5: Re-initializing TFT display...");
   tft.init();
   tft.setRotation(1);  // Landscape mode
+  delay(50);
 
-  // RESTORE backlight PWM
+  // STEP 6: Force full screen clear (multiple times to ensure clean state)
+  Serial.println("Step 6: Clearing display...");
+  tft.fillScreen(TFT_BLACK);
+  delay(20);
+  tft.fillScreen(BACKGROUND_COLOR);
+  delay(20);
+
+  // STEP 7: Restore backlight PWM
+  Serial.println("Step 7: Restoring backlight...");
   ledcAttach(BACKLIGHT_PIN, PWM_FREQ, PWM_RESOLUTION);
   ledcWrite(BACKLIGHT_PIN, brightnessValue);
-  Serial.println("Backlight restored");
 
-  // REDRAW current screen (maintains position in list!)
-  Serial.println("Redrawing display...");
+  // STEP 8: Force full redraw by resetting tracking variables
+  Serial.println("Step 8: Forcing full redraw...");
+  previousTrackSelection = -1;
+  previousScrollOffset = -1;
   updateDisplay();
 
   Serial.println("Display recovered - ready for interaction!");
