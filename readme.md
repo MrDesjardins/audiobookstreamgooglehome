@@ -7,6 +7,11 @@ The code is for the client side of an audio book machine that has two components
 - The LCD is used to show the name of the audio book. The button is pressed to send the HTTP REST endpoint. 
 - The list of audio books is also coming from the HTTP server.
 
+# Diagram
+The architecture contains several parts like the ESP-32, the TFT and some components. The backend server is also a critical parts.
+
+![](AudioBookArchitecture.png)
+
 # Specification of the Module TFT Display with EC11 Rotary Encoder module
 
 The module is a combination of 2.4 inch SPI interface display module and EC11 rotary encoder, the two are not related, just put on a board, made into an integrated module, with an additional key, the key interface is also independent, you can choose to use it according to the actual use of the situation. All-in-one design, more simple and beautiful, convenient DIY.
