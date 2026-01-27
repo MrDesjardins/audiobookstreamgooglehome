@@ -68,6 +68,12 @@ const int BACKLIGHT_PIN = 26;   // TFT backlight PWM control
 #define MAX_NAME_LENGTH 24       // Characters to display before truncating
 
 // ============================================================================
+// CAPACITY LIMITS
+// ============================================================================
+#define MAX_AUDIOBOOKS 250       // Maximum number of audiobooks to store
+#define MAX_DEVICES 20           // Maximum number of audio devices to store
+
+// ============================================================================
 // GLOBAL OBJECTS
 // ============================================================================
 TFT_eSPI tft = TFT_eSPI();       // TFT display object
@@ -88,19 +94,19 @@ DisplayMode currentMode = MODE_TRACK_SELECTION;
 // ============================================================================
 // AUDIOBOOK DATA
 // ============================================================================
-String audiobooks[50];            // Array to store audiobook names (max 50)
-int audiobookCount = 0;           // Number of audiobooks loaded
-int currentTrackSelection = 0;    // Currently selected audiobook index
-int lastPlayedTrack = -1;         // Last track that was played (-1 = none)
-int lastEncoderValue = 0;         // Previous encoder position
-int previousTrackSelection = -1;  // For smooth scrolling (track previous selection)
-int previousScrollOffset = -1;    // For smooth scrolling (track previous scroll position)
+String audiobooks[MAX_AUDIOBOOKS];  // Array to store audiobook names
+int audiobookCount = 0;             // Number of audiobooks loaded
+int currentTrackSelection = 0;      // Currently selected audiobook index
+int lastPlayedTrack = -1;           // Last track that was played (-1 = none)
+int lastEncoderValue = 0;           // Previous encoder position
+int previousTrackSelection = -1;    // For smooth scrolling (track previous selection)
+int previousScrollOffset = -1;      // For smooth scrolling (track previous scroll position)
 
 // ============================================================================
 // AUDIO OUTPUT DEVICE DATA
 // ============================================================================
-String audioDevices[20];          // Array to store device names (max 20)
-int audioDeviceCount = 0;         // Number of devices loaded
+String audioDevices[MAX_DEVICES];   // Array to store device names
+int audioDeviceCount = 0;           // Number of devices loaded
 int currentDeviceSelection = 0;   // Currently selected device index
 String selectedDevice = "";       // Currently active output device
 
@@ -635,6 +641,8 @@ void fetchAudiobookList() {
   tft.setCursor(0, 0);
   tft.println("Fetching list...");
   Serial.println("Fetching audiobook list...");
+  Serial.print("Free heap before fetch: ");
+  Serial.println(ESP.getFreeHeap());
 
   // Make HTTP GET request
   HTTPClient http;
@@ -646,16 +654,21 @@ void fetchAudiobookList() {
     String payload = http.getString();
     Serial.println("Server response:");
     Serial.println(payload);
+    Serial.print("Free heap after HTTP GET: ");
+    Serial.println(ESP.getFreeHeap());
 
     // Parse JSON response
     // Expected format: {"tracks":["1.mp3","2.mp3","3.mp3"]}
     #if ARDUINOJSON_VERSION_MAJOR >= 7
-      JsonDocument doc;  // ArduinoJson v7
+      JsonDocument doc;  // ArduinoJson v7 (dynamic allocation)
     #else
-      StaticJsonDocument<2048> doc;  // ArduinoJson v6 (adjust size if needed)
+      StaticJsonDocument<16384> doc;  // ArduinoJson v6 - 16KB for ~250 tracks
     #endif
 
     DeserializationError error = deserializeJson(doc, payload);
+
+    Serial.print("Free heap after JSON parse: ");
+    Serial.println(ESP.getFreeHeap());
 
     if (error) {
       // JSON parsing failed
@@ -674,8 +687,10 @@ void fetchAudiobookList() {
 
     // Populate audiobooks array
     for (JsonVariant track : tracks) {
-      if (audiobookCount >= 50) {
-        Serial.println("WARNING: Maximum 50 audiobooks reached");
+      if (audiobookCount >= MAX_AUDIOBOOKS) {
+        Serial.print("WARNING: Maximum ");
+        Serial.print(MAX_AUDIOBOOKS);
+        Serial.println(" audiobooks reached");
         break;
       }
       audiobooks[audiobookCount] = track.as<String>();
@@ -689,6 +704,8 @@ void fetchAudiobookList() {
     Serial.print("Successfully loaded ");
     Serial.print(audiobookCount);
     Serial.println(" audiobooks");
+    Serial.print("Free heap after loading all tracks: ");
+    Serial.println(ESP.getFreeHeap());
 
     // Reset selection if out of bounds
     if (currentTrackSelection >= audiobookCount) {
@@ -748,8 +765,10 @@ void fetchDeviceList() {
 
     // Populate audioDevices array
     for (JsonVariant device : devices) {
-      if (audioDeviceCount >= 20) {
-        Serial.println("WARNING: Maximum 20 devices reached");
+      if (audioDeviceCount >= MAX_DEVICES) {
+        Serial.print("WARNING: Maximum ");
+        Serial.print(MAX_DEVICES);
+        Serial.println(" devices reached");
         break;
       }
       audioDevices[audioDeviceCount] = device.as<String>();
