@@ -51,7 +51,7 @@ const int ENCODER_SW = 19;   // Encoder push button - moved from GPIO13 to GPIO1
 
 // Additional Controls
 const int BRIGHTNESS_BTN = 15;  // K0 button (cycles brightness)
-const int BACKLIGHT_PIN = 26;   // TFT backlight PWM control
+const int BACKLIGHT_PIN = 32;   // TFT backlight PWM control (moved from GPIO26 - suspected damaged)
 
 // TFT SPI pins are configured in TFT_eSPI library Custom_Setup.h:
 // Using HSPI: SCK=14, MOSI=13, RST=4, DC=2, CS=5
@@ -79,6 +79,15 @@ const int BACKLIGHT_PIN = 26;   // TFT backlight PWM control
 TFT_eSPI tft = TFT_eSPI();       // TFT display object
 ESP32Encoder encoder;             // Rotary encoder object
 Preferences preferences;          // Persistent storage object
+
+// JSON parse buffer kept in static/global memory, NOT on the stack.
+// A 16KB StaticJsonDocument as a local overflows the ~8KB setup() stack once
+// the track list grows, causing a crash (brief white flash then black screen).
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+  JsonDocument jsonDoc;
+#else
+  StaticJsonDocument<16384> jsonDoc;
+#endif
 
 // ============================================================================
 // MODE SYSTEM
@@ -141,6 +150,74 @@ const unsigned long TRACK_SAVE_DELAY = 3000;  // Save 3 seconds after last chang
 const int PWM_CHANNEL = 0;       // ESP32 PWM channel (0-15)
 const int PWM_FREQ = 5000;       // 5kHz frequency
 const int PWM_RESOLUTION = 8;    // 8-bit resolution (0-255)
+
+// ============================================================================
+// WIFI RETRY CONFIGURATION
+// ============================================================================
+const int WIFI_CONNECT_ROUNDS = 4;
+const unsigned long WIFI_CONNECT_TIMEOUT_MS = 12000;
+const unsigned long WIFI_RETRY_DELAY_MS = 1500;
+const unsigned long WIFI_SHUTDOWN_DELAY_MS = 300;
+
+bool connectWiFi(const char* context, int rounds) {
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("WiFi already connected for ");
+    Serial.println(context);
+    return true;
+  }
+
+  Serial.print("Connecting WiFi for ");
+  Serial.println(context);
+
+  WiFi.persistent(false);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+
+  for (int round = 1; round <= rounds; round++) {
+    Serial.print("WiFi attempt ");
+    Serial.print(round);
+    Serial.print("/");
+    Serial.println(rounds);
+
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(false, false);
+    delay(250);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+    unsigned long startedAt = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startedAt < WIFI_CONNECT_TIMEOUT_MS) {
+      delay(300);
+      Serial.print(".");
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("WiFi connected!");
+      Serial.print("IP: ");
+      Serial.println(WiFi.localIP());
+      return true;
+    }
+
+    Serial.print("WiFi attempt failed, status: ");
+    Serial.println(WiFi.status());
+    WiFi.disconnect(false, false);
+
+    if (round < rounds) {
+      delay(WIFI_RETRY_DELAY_MS * round);
+    }
+  }
+
+  Serial.println("ERROR: WiFi connection failed after all retries");
+  return false;
+}
+
+void shutdownWiFi() {
+  Serial.println("Disconnecting WiFi...");
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_OFF);
+  delay(WIFI_SHUTDOWN_DELAY_MS);
+  Serial.println("WiFi off");
+}
 
 // ============================================================================
 // BOOT ANIMATION - Character wakes up and goes to sleep
@@ -522,6 +599,38 @@ void setup() {
   Serial.begin(115200);
   Serial.println("\n\n=== Audiobook Player Starting ===");
 
+  // *** BACKLIGHT POLARITY SELF-TEST (before WiFi/fetch) ***
+  // Draws fixed content, then lights the panel with the backlight pin LOW
+  // (shows RED) and HIGH (shows BLUE). Report which one you actually see.
+  pinMode(BACKLIGHT_PIN, OUTPUT);
+  tft.init();
+  tft.setRotation(1);
+  Serial.print("[SELFTEST] tft size: ");
+  Serial.print(tft.width());
+  Serial.print("x");
+  Serial.println(tft.height());
+
+  // Phase A: backlight pin LOW -> RED screen
+  Serial.println("[SELFTEST] Phase A: backlight pin = LOW (screen drawn RED)");
+  tft.fillScreen(TFT_RED);
+  tft.setTextColor(TFT_WHITE, TFT_RED);
+  tft.setTextSize(3);
+  tft.setCursor(40, 100);
+  tft.print("BL LOW");
+  digitalWrite(BACKLIGHT_PIN, LOW);
+  delay(3000);
+
+  // Phase B: backlight pin HIGH -> BLUE screen
+  Serial.println("[SELFTEST] Phase B: backlight pin = HIGH (screen drawn BLUE)");
+  tft.fillScreen(TFT_BLUE);
+  tft.setTextColor(TFT_WHITE, TFT_BLUE);
+  tft.setTextSize(3);
+  tft.setCursor(40, 100);
+  tft.print("BL HIGH");
+  digitalWrite(BACKLIGHT_PIN, HIGH);
+  delay(3000);
+  Serial.println("[SELFTEST] Done. Which lit up: RED(LOW) or BLUE(HIGH)?");
+
   // *** LOAD SAVED PREFERENCES ***
   Serial.println("Loading saved preferences...");
   preferences.begin("audiobook", false);  // Open preferences with namespace "audiobook"
@@ -552,17 +661,11 @@ void setup() {
   Serial.println(lastPlayedTrack);
 
   // *** CONNECT WIFI FIRST - BEFORE DISPLAY INITIALIZATION ***
-  Serial.println("Connecting WiFi BEFORE display init...");
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(300);
-    Serial.print(".");
+  if (!connectWiFi("startup", 5)) {
+    Serial.println("Restarting after startup WiFi failure");
+    delay(2000);
+    ESP.restart();
   }
-
-  Serial.println("\nWiFi connected!");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
 
   // Fetch audiobook list from server
   Serial.println("Fetching audiobook list...");
@@ -575,10 +678,8 @@ void setup() {
 
   // DISCONNECT WiFi NOW - before display init
   Serial.println("Disconnecting WiFi BEFORE display init...");
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  delay(1000);  // Wait for WiFi to fully shut down
-  Serial.println("WiFi disconnected");
+  shutdownWiFi();
+  delay(700);  // Wait for WiFi to fully shut down before display init
 
   // *** NOW INITIALIZE DISPLAY - WiFi is completely off ***
   Serial.println("Initializing display AFTER WiFi is off...");
@@ -657,15 +758,10 @@ void fetchAudiobookList() {
     Serial.print("Free heap after HTTP GET: ");
     Serial.println(ESP.getFreeHeap());
 
-    // Parse JSON response
+    // Parse JSON response using the global buffer (off the stack)
     // Expected format: {"tracks":["1.mp3","2.mp3","3.mp3"]}
-    #if ARDUINOJSON_VERSION_MAJOR >= 7
-      JsonDocument doc;  // ArduinoJson v7 (dynamic allocation)
-    #else
-      StaticJsonDocument<16384> doc;  // ArduinoJson v6 - 16KB for ~250 tracks
-    #endif
-
-    DeserializationError error = deserializeJson(doc, payload);
+    jsonDoc.clear();
+    DeserializationError error = deserializeJson(jsonDoc, payload);
 
     Serial.print("Free heap after JSON parse: ");
     Serial.println(ESP.getFreeHeap());
@@ -682,7 +778,7 @@ void fetchAudiobookList() {
     }
 
     // Extract tracks array from JSON
-    JsonArray tracks = doc["tracks"].as<JsonArray>();
+    JsonArray tracks = jsonDoc["tracks"].as<JsonArray>();
     audiobookCount = 0;
 
     // Populate audiobooks array
@@ -742,15 +838,10 @@ void fetchDeviceList() {
     Serial.println("Device list response:");
     Serial.println(payload);
 
-    // Parse JSON response
+    // Parse JSON response using the global buffer (off the stack)
     // Expected format: {"devices":["device1","device2","device3"]}
-    #if ARDUINOJSON_VERSION_MAJOR >= 7
-      JsonDocument doc;  // ArduinoJson v7
-    #else
-      StaticJsonDocument<1024> doc;  // ArduinoJson v6
-    #endif
-
-    DeserializationError error = deserializeJson(doc, payload);
+    jsonDoc.clear();
+    DeserializationError error = deserializeJson(jsonDoc, payload);
 
     if (error) {
       Serial.print("ERROR: JSON parse failed: ");
@@ -760,7 +851,7 @@ void fetchDeviceList() {
     }
 
     // Extract devices array from JSON
-    JsonArray devices = doc["devices"].as<JsonArray>();
+    JsonArray devices = jsonDoc["devices"].as<JsonArray>();
     audioDeviceCount = 0;
 
     // Populate audioDevices array
@@ -1059,22 +1150,9 @@ void sendPlayRequest(int index) {
 
   // CONNECT WiFi FIRST and send request immediately
   // This way Google Home starts loading while animation plays
-  Serial.println("Connecting WiFi...");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(300);
-    Serial.print(".");
-    attempts++;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!connectWiFi("playback request", WIFI_CONNECT_ROUNDS)) {
     Serial.println("\nERROR: WiFi connection failed!");
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    delay(200);
+    shutdownWiFi();
 
     // Simple recovery - HSPI is separate from WiFi's VSPI
     tft.init();
@@ -1086,8 +1164,6 @@ void sendPlayRequest(int index) {
     updateDisplay();
     return;
   }
-
-  Serial.println("\nWiFi connected!");
 
   // SEND HTTP REQUEST IMMEDIATELY (Google Home starts loading now)
   HTTPClient http;
@@ -1121,11 +1197,7 @@ void sendPlayRequest(int index) {
   // =========================================================================
 
   // Disconnect WiFi
-  Serial.println("Disconnecting WiFi...");
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  delay(200);
-  Serial.println("WiFi off");
+  shutdownWiFi();
 
   // Re-initialize TFT display (TFT_eSPI manages HSPI internally)
   Serial.println("Re-initializing display...");
